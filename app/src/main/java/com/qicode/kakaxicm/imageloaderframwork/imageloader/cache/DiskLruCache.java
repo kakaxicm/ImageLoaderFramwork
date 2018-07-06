@@ -99,6 +99,7 @@ import java.util.concurrent.TimeUnit;
  * responding appropriately.
  */
 public final class DiskLruCache implements Closeable {
+    //跟踪文件
     static final String JOURNAL_FILE = "journal";
     static final String JOURNAL_FILE_TMP = "journal.tmp";
     static final String MAGIC = "libcore.io.DiskLruCache";
@@ -152,14 +153,15 @@ public final class DiskLruCache implements Closeable {
      * it exists when the cache is opened.
      */
 
-    private final File directory;
-    private final File journalFile;
-    private final File journalFileTmp;
-    private final int appVersion;
-    private final long maxSize;
-    private final int valueCount;
+    private final File directory;//缓存根目录
+    private final File journalFile;//跟踪文件
+    private final File journalFileTmp;//临时跟踪文件
+    private final int appVersion;//版本
+    private final long maxSize;//最大容量
+    private final int valueCount;//一个key对应多少value
     private long size = 0;
     private Writer journalWriter;
+    //维护Lru缓存
     private final LinkedHashMap<String, Entry> lruEntries
             = new LinkedHashMap<String, Entry>(0, 0.75f, true);
     private int redundantOpCount;
@@ -269,9 +271,13 @@ public final class DiskLruCache implements Closeable {
 
     /**
      * This cache uses a single background thread to evict entries.
+     * 回收entry线程
      */
     private final ExecutorService executorService = new ThreadPoolExecutor(0, 1,
             60L, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+    /**
+     * 清理操作
+     */
     private final Callable<Void> cleanupCallable = new Callable<Void>() {
         @Override
         public Void call() throws Exception {
@@ -319,10 +325,10 @@ public final class DiskLruCache implements Closeable {
 
         // prefer to pick up where we left off
         DiskLruCache cache = new DiskLruCache(directory, appVersion, valueCount, maxSize);
-        if (cache.journalFile.exists()) {
+        if (cache.journalFile.exists()) {//存在跟踪文件，初始化entry集合
             try {
-                cache.readJournal();
-                cache.processJournal();
+                cache.readJournal();//读日志文件，初始化entry集合
+                cache.processJournal();//删除脏文件
                 cache.journalWriter = new BufferedWriter(new FileWriter(cache.journalFile, true),
                         IO_BUFFER_SIZE);
                 return cache;
@@ -334,20 +340,32 @@ public final class DiskLruCache implements Closeable {
         }
 
         // create a new empty cache
+        //不存在日志文件，则创建日志文件
         directory.mkdirs();
         cache = new DiskLruCache(directory, appVersion, valueCount, maxSize);
+        //将entry集合数据写入日志文件
         cache.rebuildJournal();
         return cache;
     }
 
+    /**
+     * 读日志文件，初始化entry集合
+     * @throws IOException
+     */
     private void readJournal() throws IOException {
         InputStream in = new BufferedInputStream(new FileInputStream(journalFile), IO_BUFFER_SIZE);
         try {
+            //文件头第一行
             String magic = readAsciiLine(in);
+            //Cache版本
             String version = readAsciiLine(in);
+            //app版本
             String appVersionString = readAsciiLine(in);
+            //一个key,对应几个value
             String valueCountString = readAsciiLine(in);
+            //空白行
             String blank = readAsciiLine(in);
+            //校验文件头
             if (!MAGIC.equals(magic)
                     || !VERSION_1.equals(version)
                     || !Integer.toString(appVersion).equals(appVersionString)
@@ -356,7 +374,7 @@ public final class DiskLruCache implements Closeable {
                 throw new IOException("unexpected journal header: ["
                         + magic + ", " + version + ", " + valueCountString + ", " + blank + "]");
             }
-
+            //开始读正式的日志
             while (true) {
                 try {
                     readJournalLine(readAsciiLine(in));
@@ -369,29 +387,47 @@ public final class DiskLruCache implements Closeable {
         }
     }
 
+    /**
+     * 读每个entry的记录
+     * DIRTY c3bac86f2e7a291a1a200b853835b664
+     * CLEAN c3bac86f2e7a291a1a200b853835b664 4698
+     * REMOVE 536788f4dbdffeecfbb8f350a941eea3
+     * READ be8bdac81c12a08e15988555d85dfd2b
+     * ********************************************
+     * DIRTY 为脏记录，表示正在写入
+     * CLEAN 为可用记录 后面的数字为文件大小
+     * REMOVE 表示记录删除
+     * READ 表示缓存被访问
+     * 长串字符为key
+     * @param line
+     * @throws IOException
+     */
     private void readJournalLine(String line) throws IOException {
         String[] parts = line.split(" ");
         if (parts.length < 2) {
             throw new IOException("unexpected journal line: " + line);
         }
 
-        String key = parts[1];
+        String key = parts[1];//取key
+        //读到remove,删除entry
         if (parts[0].equals(REMOVE) && parts.length == 2) {
             lruEntries.remove(key);
             return;
         }
-
+        //非remove记录
         Entry entry = lruEntries.get(key);
         if (entry == null) {
             entry = new Entry(key);
             lruEntries.put(key, entry);
         }
-
+        //Clean记录表示entry可用
         if (parts[0].equals(CLEAN) && parts.length == 2 + valueCount) {
             entry.readable = true;
             entry.currentEditor = null;
+            //读取文件大小数组
             entry.setLengths(copyOfRange(parts, 2, parts.length));
         } else if (parts[0].equals(DIRTY) && parts.length == 2) {
+            //脏数据，表示正在写入缓存,设置Editor
             entry.currentEditor = new Editor(entry);
         } else if (parts[0].equals(READ) && parts.length == 2) {
             // this work was already done by calling lruEntries.get()
@@ -403,16 +439,18 @@ public final class DiskLruCache implements Closeable {
     /**
      * Computes the initial size and collects garbage as a part of opening the
      * cache. Dirty entries are assumed to be inconsistent and will be deleted.
+     * 计算当前size,删除dirty记录
      */
     private void processJournal() throws IOException {
-        deleteIfExists(journalFileTmp);
+        deleteIfExists(journalFileTmp);//删除临时日志
         for (Iterator<Entry> i = lruEntries.values().iterator(); i.hasNext(); ) {
             Entry entry = i.next();
-            if (entry.currentEditor == null) {
+            if (entry.currentEditor == null) {//表示entry不是dirty,累加size
                 for (int t = 0; t < valueCount; t++) {
                     size += entry.lengths[t];
                 }
             } else {
+                //删除脏文件
                 entry.currentEditor = null;
                 for (int t = 0; t < valueCount; t++) {
                     deleteIfExists(entry.getCleanFile(t));
@@ -426,12 +464,14 @@ public final class DiskLruCache implements Closeable {
     /**
      * Creates a new journal that omits redundant information. This replaces the
      * current journal if it exists.
+     * entry集合写入日志文件
      */
     private synchronized void rebuildJournal() throws IOException {
         if (journalWriter != null) {
             journalWriter.close();
         }
-
+        //先写到临时日志文件
+        //写文件头
         Writer writer = new BufferedWriter(new FileWriter(journalFileTmp), IO_BUFFER_SIZE);
         writer.write(MAGIC);
         writer.write("\n");
@@ -442,7 +482,7 @@ public final class DiskLruCache implements Closeable {
         writer.write(Integer.toString(valueCount));
         writer.write("\n");
         writer.write("\n");
-
+        //日志正文
         for (Entry entry : lruEntries.values()) {
             if (entry.currentEditor != null) {
                 writer.write(DIRTY + ' ' + entry.key + '\n');
@@ -452,7 +492,9 @@ public final class DiskLruCache implements Closeable {
         }
 
         writer.close();
+        //临时文件写入完毕，更名为正式日志文件
         journalFileTmp.renameTo(journalFile);
+        //更换写入流
         journalWriter = new BufferedWriter(new FileWriter(journalFile, true), IO_BUFFER_SIZE);
     }
 
@@ -473,16 +515,18 @@ public final class DiskLruCache implements Closeable {
      * Returns a snapshot of the entry named {@code key}, or null if it doesn't
      * exist is not currently readable. If a value is returned, it is moved to
      * the head of the LRU queue.
+     * 读取缓存
      */
     public synchronized Snapshot get(String key) throws IOException {
-        checkNotClosed();
-        validateKey(key);
+        checkNotClosed();//校验日志文件写入流是否关闭
+        validateKey(key);//校验key
+        //取entry，get内部会执行lru算法
         Entry entry = lruEntries.get(key);
         if (entry == null) {
             return null;
         }
 
-        if (!entry.readable) {
+        if (!entry.readable) {//entry目前是脏的，不可读
             return null;
         }
 
@@ -491,6 +535,7 @@ public final class DiskLruCache implements Closeable {
          * snapshot. If we opened streams lazily then the streams could come
          * from different edits.
          */
+        //构建clean文件输入流
         InputStream[] ins = new InputStream[valueCount];
         try {
             for (int i = 0; i < valueCount; i++) {
@@ -500,10 +545,11 @@ public final class DiskLruCache implements Closeable {
             // a file must have been deleted manually!
             return null;
         }
-
+        //操作数加1
         redundantOpCount++;
+        //日志写入read记录
         journalWriter.append(READ + ' ' + key + '\n');
-        if (journalRebuildRequired()) {
+        if (journalRebuildRequired()) {//是否需要重建日志文件
             executorService.submit(cleanupCallable);
         }
 
@@ -518,25 +564,36 @@ public final class DiskLruCache implements Closeable {
         return edit(key, ANY_SEQUENCE_NUMBER);
     }
 
+    /**
+     * 为entry构建编辑器
+     * @param key
+     * @param expectedSequenceNumber
+     * @return
+     * @throws IOException
+     * 注意这是同步代码，保证一个entry只有一个Editor工作
+     */
     private synchronized Editor edit(String key, long expectedSequenceNumber) throws IOException {
-        checkNotClosed();
-        validateKey(key);
-        Entry entry = lruEntries.get(key);
+        checkNotClosed();//检查写入流是否关闭
+        validateKey(key);//校验key
+        Entry entry = lruEntries.get(key);//取clean entry
         if (expectedSequenceNumber != ANY_SEQUENCE_NUMBER
                 && (entry == null || entry.sequenceNumber != expectedSequenceNumber)) {
             return null; // snapshot is stale
         }
+        //如果没有clean缓存，新建entry
         if (entry == null) {
             entry = new Entry(key);
             lruEntries.put(key, entry);
         } else if (entry.currentEditor != null) {
+            //其他地方持有写入流,返回
             return null; // another edit is in progress
         }
-
+        //此时key已经有clean的缓存，currentEditor为空，则为entry绑定新的Editor，开始重新写入新数据，日志文件为dirty
         Editor editor = new Editor(entry);
         entry.currentEditor = editor;
 
         // flush the journal before creating files to prevent file leaks
+        //日志新增一条dirty记录,注意此时内存中entry仍然指向之前的clean文件
         journalWriter.write(DIRTY + ' ' + key + '\n');
         journalWriter.flush();
         return editor;
@@ -566,6 +623,12 @@ public final class DiskLruCache implements Closeable {
         return size;
     }
 
+    /**
+     * 完成编辑
+     * @param editor
+     * @param success
+     * @throws IOException
+     */
     private synchronized void completeEdit(Editor editor, boolean success) throws IOException {
         Entry entry = editor.entry;
         if (entry.currentEditor != editor) {
@@ -573,8 +636,10 @@ public final class DiskLruCache implements Closeable {
         }
 
         // if this edit is creating the entry for the first time, every index must have a value
+        //成功且第一次写入
         if (success && !entry.readable) {
             for (int i = 0; i < valueCount; i++) {
+                //临时文件不存在，抛异常
                 if (!entry.getDirtyFile(i).exists()) {
                     editor.abort();
                     throw new IllegalStateException("edit didn't create file " + i);
@@ -583,34 +648,42 @@ public final class DiskLruCache implements Closeable {
         }
 
         for (int i = 0; i < valueCount; i++) {
-            File dirty = entry.getDirtyFile(i);
-            if (success) {
+            File dirty = entry.getDirtyFile(i);//临时文件
+            if (success) {//成功则临时文件改为正式文件
                 if (dirty.exists()) {
+                    //写入完毕的临时文件更名为正式测clean文件
                     File clean = entry.getCleanFile(i);
                     dirty.renameTo(clean);
+                    //更新entry及size
                     long oldLength = entry.lengths[i];
                     long newLength = clean.length();
                     entry.lengths[i] = newLength;
                     size = size - oldLength + newLength;
                 }
             } else {
+                //不成功则删除临时文件
                 deleteIfExists(dirty);
             }
         }
-
+        //操作数加1
         redundantOpCount++;
+        //写入缓存完毕，currentEditor置空表示可读
         entry.currentEditor = null;
         if (entry.readable | success) {
-            entry.readable = true;
+            entry.readable = true;//缓存可读
+            //新增clean记录
             journalWriter.write(CLEAN + ' ' + entry.key + entry.getLengths() + '\n');
             if (success) {
                 entry.sequenceNumber = nextSequenceNumber++;
             }
         } else {
+            //写入失败,则移除缓存
             lruEntries.remove(entry.key);
+            //新增remove日志
             journalWriter.write(REMOVE + ' ' + entry.key + '\n');
         }
 
+        //清理缓存
         if (size > maxSize || journalRebuildRequired()) {
             executorService.submit(cleanupCallable);
         }
@@ -619,6 +692,7 @@ public final class DiskLruCache implements Closeable {
     /**
      * We only rebuild the journal when it will halve the size of the journal
      * and eliminate at least 2000 ops.
+     * 限制日子写入操作记录，超过则重建，避免日志文件过大
      */
     private boolean journalRebuildRequired() {
         final int REDUNDANT_OP_COMPACT_THRESHOLD = 2000;
@@ -631,28 +705,33 @@ public final class DiskLruCache implements Closeable {
      * actively being edited cannot be removed.
      *
      * @return true if an entry was removed.
+     * 删除缓存
      */
     public synchronized boolean remove(String key) throws IOException {
-        checkNotClosed();
-        validateKey(key);
+        checkNotClosed();//检测日志文件输出流
+        validateKey(key);//校验key
         Entry entry = lruEntries.get(key);
+        //entry当前正在被写入，则返回
         if (entry == null || entry.currentEditor != null) {
             return false;
         }
-
+        //删除clean文件
         for (int i = 0; i < valueCount; i++) {
             File file = entry.getCleanFile(i);
             if (!file.delete()) {
                 throw new IOException("failed to delete " + file);
             }
+            //size计算
             size -= entry.lengths[i];
             entry.lengths[i] = 0;
         }
-
+        //操作数++
         redundantOpCount++;
+        //新增remove日志
         journalWriter.append(REMOVE + ' ' + key + '\n');
+        //内存删除缓存
         lruEntries.remove(key);
-
+        //是否重建日志文件
         if (journalRebuildRequired()) {
             executorService.submit(cleanupCallable);
         }
@@ -662,11 +741,15 @@ public final class DiskLruCache implements Closeable {
 
     /**
      * Returns true if this cache has been closed.
+     * cache是否熄火
      */
     public boolean isClosed() {
         return journalWriter == null;
     }
 
+    /**
+     * 校验cache是否关闭
+     */
     private void checkNotClosed() {
         if (journalWriter == null) {
             throw new IllegalStateException("cache is closed");
@@ -684,6 +767,7 @@ public final class DiskLruCache implements Closeable {
 
     /**
      * Closes this cache. Stored values will remain on the filesystem.
+     * 关闭cache,切断和磁盘的联系
      */
     public synchronized void close() throws IOException {
         if (journalWriter == null) {
@@ -691,14 +775,19 @@ public final class DiskLruCache implements Closeable {
         }
         for (Entry entry : new ArrayList<Entry>(lruEntries.values())) {
             if (entry.currentEditor != null) {
-                entry.currentEditor.abort();
+                entry.currentEditor.abort();//释放编辑权
             }
         }
         trimToSize();
+        //关闭日志文件流
         journalWriter.close();
         journalWriter = null;
     }
 
+    /**
+     * 容量收缩
+     * @throws IOException
+     */
     private void trimToSize() throws IOException {
         while (size > maxSize) {
 //            Map.Entry<String, Entry> toEvict = lruEntries.eldest();
@@ -711,6 +800,7 @@ public final class DiskLruCache implements Closeable {
      * Closes the cache and deletes all of its stored values. This will delete
      * all files in the cache directory including files that weren't created by
      * the cache.
+     * 删除全部缓存和日志文件
      */
     public void delete() throws IOException {
         close();
@@ -815,12 +905,14 @@ public final class DiskLruCache implements Closeable {
          * when writing to the filesystem, this edit will be aborted when
          * {@link #commit} is called. The returned output stream does not throw
          * IOExceptions.
+         * 返回文件输出流
          */
         public OutputStream newOutputStream(int index) throws IOException {
             synchronized (DiskLruCache.this) {
                 if (entry.currentEditor != this) {
                     throw new IllegalStateException();
                 }
+                //返回脏文件的输出流,给调用者使用
                 return new FaultHidingOutputStream(new FileOutputStream(entry.getDirtyFile(index)));
             }
         }
@@ -841,12 +933,16 @@ public final class DiskLruCache implements Closeable {
         /**
          * Commits this edit so it is visible to readers.  This releases the
          * edit lock so another edit may be started on the same key.
+         * 表示写入操作完成
          */
         public void commit() throws IOException {
-            if (hasErrors) {
+            if (hasErrors) {//写入失败则走错误逻辑
                 completeEdit(this, false);
-                remove(entry.key); // the previous entry is stale
+                //删除缓存entry
+                remove(entry.key); // the previous entry is stale,
+                // 之前的clean缓存已经被脏文件覆盖,所以需要删除之前的文件
             } else {
+                //如果没有出IO异常，表示写入成功
                 completeEdit(this, true);
             }
         }
@@ -854,11 +950,15 @@ public final class DiskLruCache implements Closeable {
         /**
          * Aborts this edit. This releases the edit lock so another edit may be
          * started on the same key.
+         * 存储失败的逻辑
          */
         public void abort() throws IOException {
             completeEdit(this, false);
         }
 
+        /**
+         * 包装了一层os,捕获异常设置hasErrors，作为io失败的标记
+         */
         private class FaultHidingOutputStream extends FilterOutputStream {
             private FaultHidingOutputStream(OutputStream out) {
                 super(out);
@@ -959,10 +1059,20 @@ public final class DiskLruCache implements Closeable {
             throw new IOException("unexpected journal line: " + Arrays.toString(strings));
         }
 
+        /**
+         * 返回可用的cache文件
+         * @param i
+         * @return
+         */
         public File getCleanFile(int i) {
             return new File(directory, key + "." + i);
         }
 
+        /**
+         * 返回正在写入的文件
+         * @param i
+         * @return
+         */
         public File getDirtyFile(int i) {
             return new File(directory, key + "." + i + ".tmp");
         }

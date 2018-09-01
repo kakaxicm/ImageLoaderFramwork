@@ -17,7 +17,7 @@ import com.qicode.kakaxicm.imageloaderframwork.imageloader.request.BitmapRequest
  */
 public abstract class AbsLoader implements Loader {
     private Cache mCache = ImageLoader.getInstance().getImageLoaderConfig().getCache();
-    private DisplayConfig mGlobelDisplayConfig = ImageLoader.getInstance().getImageLoaderConfig().getDisplayConfig();
+    private DisplayConfig mGlobalDisplayConfig = ImageLoader.getInstance().getImageLoaderConfig().getDisplayConfig();
 
     @Override
     public void loadImage(BitmapRequest request) {
@@ -69,8 +69,8 @@ public abstract class AbsLoader implements Loader {
         if (bitmap != null && imageView.getTag().equals(request.getImageUri())) {
             imageView.setImageBitmap(bitmap);
             //有可能图片还需要客户处理
-            if (request.imageListener != null) {
-                request.imageListener.onComplete(imageView, bitmap, request.getImageUri());
+            if (request.mImageListener != null) {
+                request.mImageListener.onComplete(imageView, bitmap, request.getImageUri());
             }
             return;
         }
@@ -112,12 +112,12 @@ public abstract class AbsLoader implements Loader {
             });
             return;
         }
-        //如果本次请求没有单独配置DisplayConfig，则从全局gloable中配置
-        if (mGlobelDisplayConfig != null && mGlobelDisplayConfig.loadingImage != -1) {
+        //如果本次请求没有单独配置DisplayConfig，则从全局配置参数中配置
+        if (mGlobalDisplayConfig != null && mGlobalDisplayConfig.loadingImage != -1) {
             imageView.post(new Runnable() {
                 @Override
                 public void run() {
-                    imageView.setImageResource(mGlobelDisplayConfig.loadingImage);
+                    imageView.setImageResource(mGlobalDisplayConfig.loadingImage);
                 }
             });
         }
@@ -132,21 +132,21 @@ public abstract class AbsLoader implements Loader {
         //先尝试从request中加载图片
         final DisplayConfig localDisplayConfig = request.getDisplayConfig();
         final ImageView imageView = request.getImageView();
-        if (localDisplayConfig != null && localDisplayConfig.faildImage != -1) {
+        if (localDisplayConfig != null && localDisplayConfig.failedImage != -1) {
             imageView.post(new Runnable() {
                 @Override
                 public void run() {
-                    imageView.setImageResource(localDisplayConfig.faildImage);
+                    imageView.setImageResource(localDisplayConfig.failedImage);
                 }
             });
             return;
         }
         //如果本次请求没有单独配置DisplayConfig，则从全局gloable中配置
-        if (mGlobelDisplayConfig != null && mGlobelDisplayConfig.faildImage != -1) {
+        if (mGlobalDisplayConfig != null && mGlobalDisplayConfig.failedImage != -1) {
             imageView.post(new Runnable() {
                 @Override
                 public void run() {
-                    imageView.setImageResource(mGlobelDisplayConfig.faildImage);
+                    imageView.setImageResource(mGlobalDisplayConfig.failedImage);
                 }
             });
         }

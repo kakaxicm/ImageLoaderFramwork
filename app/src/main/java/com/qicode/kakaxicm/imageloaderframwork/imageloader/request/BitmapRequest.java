@@ -21,10 +21,10 @@ import java.lang.ref.SoftReference;
 public class BitmapRequest implements Comparable<BitmapRequest> {
     private SoftReference<ImageView> mImageViewRef;
 
-    private String imageUri;//文件或者网络地址
-    private String imageUriMd5;//cache的key，磁盘缓存文件名
+    private String mImageUri;//文件或者网络地址
+    private String mImageUriMd5;//cache的key，磁盘缓存文件名
     //下载完成监听
-    public ImageLoader.ImageListener imageListener;
+    public ImageLoader.ImageListener mImageListener;
     //加载策略,取默认的加载策略
     private LoadPolicy mLoadLoadPolicy = ImageLoader.getInstance().getImageLoaderConfig().getPolicy();//默认全局的加载策略
     private DisplayConfig mDisplayConfig = ImageLoader.getInstance().getImageLoaderConfig().getDisplayConfig();//局部的DisplayConfig,默认全局的dispayconfig
@@ -34,11 +34,11 @@ public class BitmapRequest implements Comparable<BitmapRequest> {
      */
     private int mSerialNumb;
 
-    public BitmapRequest(ImageView imageView, String imageUri, DisplayConfig displayConfig, LoadPolicy loadPolicy, ImageLoader.ImageListener listener) {
+    public BitmapRequest(ImageView imageView, String mImageUri, DisplayConfig displayConfig, LoadPolicy loadPolicy, ImageLoader.ImageListener listener) {
         this.mImageViewRef = new SoftReference<>(imageView);
-        imageView.setTag(imageUri);//设置tag,保持请求和响应一致
-        this.imageUri = imageUri;
-        this.imageUriMd5 = MD5Utils.toMD5(imageUri);
+        imageView.setTag(mImageUri);//设置tag,保持请求和响应一致
+        this.mImageUri = mImageUri;
+        this.mImageUriMd5 = MD5Utils.toMD5(mImageUri);
         //配置局部生效的displayConfig
         if (displayConfig != null) {
             this.mDisplayConfig = displayConfig;
@@ -47,8 +47,8 @@ public class BitmapRequest implements Comparable<BitmapRequest> {
         if(loadPolicy != null){
             this.mLoadLoadPolicy = loadPolicy;
         }
-        if (imageListener != null) {
-            this.imageListener = listener;
+        if (mImageListener != null) {
+            this.mImageListener = listener;
         }
     }
 
@@ -61,11 +61,11 @@ public class BitmapRequest implements Comparable<BitmapRequest> {
     }
 
     public String getImageUriMd5() {
-        return imageUriMd5;
+        return mImageUriMd5;
     }
 
     public String getImageUri() {
-        return imageUri;
+        return mImageUri;
     }
 
     public DisplayConfig getDisplayConfig() {

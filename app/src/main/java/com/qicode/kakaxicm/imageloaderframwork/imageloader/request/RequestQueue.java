@@ -20,17 +20,17 @@ public class RequestQueue {
     private AtomicInteger serialNumbGenerator = new AtomicInteger(0);
 
     //执行线程
-    private RequestDispatcher[] mDispachers;
+    private RequestDispatcher[] mDispatchers;
 
     public RequestQueue(int count) {
         mDispatcherCount = count;
-        mDispachers = new RequestDispatcher[mDispatcherCount];
+        mDispatchers = new RequestDispatcher[mDispatcherCount];
     }
 
     public void start() {
         for (int i = 0; i < mDispatcherCount; i++) {
             RequestDispatcher dispatcher = new RequestDispatcher(mRequestQueue);
-            mDispachers[i] = dispatcher;
+            mDispatchers[i] = dispatcher;
             dispatcher.start();
         }
     }

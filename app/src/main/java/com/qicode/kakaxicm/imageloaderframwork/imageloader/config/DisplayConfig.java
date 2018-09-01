@@ -10,5 +10,5 @@ public class DisplayConfig {
      */
     public int loadingImage = -1;//正在加载图片ResID
     //加载失败显示的图片
-    public int faildImage = -1;//加载失败图片ResID
+    public int failedImage = -1;//加载失败图片ResID
 }

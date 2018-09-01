@@ -11,8 +11,6 @@ import com.qicode.kakaxicm.imageloaderframwork.imageloader.util.ImageSizeUtil;
 
 import java.io.BufferedInputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 
 /**
  * Created by chenming on 2018/7/5

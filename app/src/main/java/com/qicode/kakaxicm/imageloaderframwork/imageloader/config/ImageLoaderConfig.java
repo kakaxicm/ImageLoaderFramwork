@@ -91,7 +91,7 @@ public class ImageLoaderConfig {
          * @return
          */
         public Builder setFaildImage(int resID) {
-            mConfig.mDisplayConfig.faildImage = resID;
+            mConfig.mDisplayConfig.failedImage = resID;
             return this;
         }
 
